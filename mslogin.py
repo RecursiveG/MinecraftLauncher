@@ -37,6 +37,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 FLAGS = flags.FLAGS
 flags.DEFINE_string("credential", "credential.json", "Location to credential database")
 flags.DEFINE_bool("verbose", False, "")
+flags.DEFINE_bool("print_gameprofile", False, "Display Minecraft gameprofile")
 #flags.DEFINE_bool("force_refresh_oauth2_access_token", False, "")
 #flags.mark_flag_as_required("credential")
 
@@ -408,6 +409,18 @@ def main(argv):
     cred = load_credential()
     mc_accesstoken = get_minecraft_accesstoken(cred)
     print(mc_accesstoken)
+
+    if FLAGS.print_gameprofile:
+        (resp, content) = http.request("https://api.minecraftservices.com/entitlements/mcstore",
+                                       "GET",
+                                       headers={"Authorization": "Bearer " + mc_accesstoken})
+        print(f"---- {resp.status} <== GET https://api.minecraftservices.com/entitlements/mcstore")
+        print(json.dumps(json.loads(content.decode()), indent=2))
+        (resp, content) = http.request("https://api.minecraftservices.com/minecraft/profile",
+                                       "GET",
+                                       headers={"Authorization": "Bearer " + mc_accesstoken})
+        print(f"---- {resp.status} <== GET https://api.minecraftservices.com/minecraft/profile")
+        print(json.dumps(json.loads(content.decode()), indent=2))
 
 
 if __name__ == '__main__':
