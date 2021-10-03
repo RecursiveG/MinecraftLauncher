@@ -316,14 +316,13 @@ def sisu_authorization(cred):
     device_token = get_device_token(cred)
     priv_key = get_device_key(cred)
 
-    payload_obj = dict(
+    payload_obj = dict(    # SessionId=""
         AccessToken="t=" + oauth2_access_token,
         AppId="00000000402b5328",
         DeviceToken=device_token,
         ProofKey=get_proofkey(priv_key),
         RelyingParty="http://xboxlive.com",
         Sandbox="RETAIL",
-    # SessionId="00fbafefcd8f4b4e8f3ef3402cfc79543",
         SiteName="user.auth.xboxlive.com",
         UseModernGamertag=True,
     )
@@ -380,11 +379,20 @@ def get_xsts_token(cred) -> (str, str):
     return xsts_token_obj["Token"], xsts_token_obj["DisplayClaims"]["xui"][0]["uhs"]
 
 
-def get_minecraft_accesstoken(cred) -> str:
+class MinecraftAuthProfile:
+    def __init__(self, cred):
+        self.auth_access_token = cred["minecraft_accesstoken"]["access_token"]
+        self.auth_player_name = cred["gameprofile"]["name"]
+        self.auth_uuid = cred["gameprofile"]["id"]
+        assert len(cred["sisu_token_dict"]["AuthorizationToken"]["DisplayClaims"]["xui"]) == 1
+        self.auth_xuid = str(cred["sisu_token_dict"]["AuthorizationToken"]["DisplayClaims"]["xui"][0]['xid'])
+
+
+def get_minecraft_accesstoken(cred) -> MinecraftAuthProfile:
     if "minecraft_accesstoken_expiration" in cred:
         seconds_till_expire = cred["minecraft_accesstoken_expiration"] - int(time.time())
         if seconds_till_expire > 12 * 3600:
-            return cred["minecraft_accesstoken"]["access_token"]
+            return MinecraftAuthProfile(cred)
 
     (xsts_token, userhash) = get_xsts_token(cred)
     payload_obj = dict(identityToken="XBL3.0 x=%s;%s" % (userhash, xsts_token))
@@ -395,8 +403,16 @@ def get_minecraft_accesstoken(cred) -> str:
     rsp_obj = json.loads(content.decode())
     cred["minecraft_accesstoken"] = rsp_obj
     cred["minecraft_accesstoken_expiration"] = int(time.time()) + rsp_obj["expires_in"]
+
+    # refresh game profile
+    (resp, content) = http.request("https://api.minecraftservices.com/minecraft/profile",
+                                   "GET",
+                                   headers={"Authorization": "Bearer " + rsp_obj["access_token"]})
+    assert resp["status"] == "200", (resp, content)
+    cred["gameprofile"] = json.loads(content.decode())
+
     save_credential(cred)
-    return rsp_obj["access_token"]
+    return MinecraftAuthProfile(cred)
 
 
 def main(argv):
@@ -407,18 +423,18 @@ def main(argv):
         httplib2.debuglevel = 1
 
     cred = load_credential()
-    mc_accesstoken = get_minecraft_accesstoken(cred)
-    print(mc_accesstoken)
+    auth_profile = get_minecraft_accesstoken(cred)
+    print(auth_profile.auth_access_token)
 
     if FLAGS.print_gameprofile:
         (resp, content) = http.request("https://api.minecraftservices.com/entitlements/mcstore",
                                        "GET",
-                                       headers={"Authorization": "Bearer " + mc_accesstoken})
+                                       headers={"Authorization": "Bearer " + auth_profile.auth_access_token})
         print(f"---- {resp.status} <== GET https://api.minecraftservices.com/entitlements/mcstore")
         print(json.dumps(json.loads(content.decode()), indent=2))
         (resp, content) = http.request("https://api.minecraftservices.com/minecraft/profile",
                                        "GET",
-                                       headers={"Authorization": "Bearer " + mc_accesstoken})
+                                       headers={"Authorization": "Bearer " + auth_profile.auth_access_token})
         print(f"---- {resp.status} <== GET https://api.minecraftservices.com/minecraft/profile")
         print(json.dumps(json.loads(content.decode()), indent=2))
 
