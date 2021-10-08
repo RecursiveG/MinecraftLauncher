@@ -41,12 +41,22 @@ def httpget(url):
 
 
 def download_file(url: str, dst: Path, hash=None):
-    if not dst.exists():
-        dst.parent.mkdir(0o755, True, True)
-        with open(dst, "wb") as f:
-            f.write(httpget(url))
+    if dst.exists():
+        # check hash if file exists
+        if hash is not None:
+            actual_hash = hashlib.sha1(open(dst, "rb").read()).hexdigest()
+            if actual_hash == hash:
+                return
+        else:
+            print(f"[warn] No HASH for {str(dst)}, cannot check integrity")
+
+    # download and check hash
+    dst.parent.mkdir(0o755, True, True)
+    with open(dst, "wb") as f:
+        f.write(httpget(url))
     if hash is not None:
-        assert hash == hashlib.sha1(open(dst, "rb").read()).hexdigest()
+        actual_hash = hashlib.sha1(open(dst, "rb").read()).hexdigest()
+        assert hash == actual_hash, f"url={url} path={str(dst)} hash={hash} actual={actual_hash}"
 
 
 #======= downloader =======#
