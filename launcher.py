@@ -115,8 +115,7 @@ def download_libraries(library_map):
 def download_asset(version):
     # Read asset index from .minecraft/versions/<version>
     # Then download the assets.
-    cfg = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".json")
-    obj = json.load(open(cfg, "r"))
+    obj = load_merged_version_json(version)
     ai = obj["assetIndex"]
 
     p = Path(FLAGS.dotmc_folder) / "assets/indexes" / (ai["id"] + ".json")
@@ -174,11 +173,39 @@ def parse_libraries_rules(rules):
 
 # ===== version.json parser ===== #
 
+VERSION_JSON_INHERITE_OVERWRITE = set("id time releaseTime type mainClass".split(" "))
+VERSION_JSON_INHERITE_IGNORE = set("_comment_ inheritsFrom logging".split(" "))
+VERSION_JSON_INHERITE_SPECIAL = set("arguments libraries".split(" "))
+
+
+def load_merged_version_json(version) -> "merged_version_json":
+    this_version_json_path = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".json")
+    assert this_version_json_path.is_file(), f"{version} not exists"
+    obj = json.load(open(this_version_json_path, "r"))
+
+    if "inheritsFrom" in obj:
+        base_obj = load_merged_version_json(obj["inheritsFrom"])
+        for k, v in obj.items():
+            if k in VERSION_JSON_INHERITE_IGNORE:
+                continue
+            elif k in VERSION_JSON_INHERITE_OVERWRITE:
+                base_obj[k] = v
+            elif k in VERSION_JSON_INHERITE_SPECIAL:
+                if k == "libraries":
+                    base_obj["libraries"] += v
+                elif k == "arguments":
+                    base_obj["arguments"]["game"] += v["game"]
+                    base_obj["arguments"]["jvm"] += v["jvm"]
+            else:
+                assert False, f"unexpected inhertance field: {k}"
+        return base_obj
+    else:
+        return obj
+
 
 def compose_args(version) -> ('args_game list', 'args_jvm list'):
     # compose unsubstituted argument list for .minecraft/versions/<version>
-    cfg = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".json")
-    version_obj = json.load(open(cfg, "r"))
+    version_obj = load_merged_version_json(version)
 
     def walker(src, rule_checker, dst):
         for a in src:
@@ -196,43 +223,40 @@ def compose_args(version) -> ('args_game list', 'args_jvm list'):
     walker(version_obj["arguments"]["game"], parse_arguments_game_rules, args_game)
     walker(version_obj["arguments"]["jvm"], parse_arguments_jvm_rules, args_jvm)
 
-    # print("Game args:", end="")
-    # for x in args_game:
-    #     if x[:1] == "-":
-    #         print("\n ", end="")
-    #     print(" " + x, end="")
-    # print()
-
-    # print("JVM args:", end="")
-    # for x in args_jvm:
-    #     if x[:1] == "-":
-    #         print("\n ", end="")
-    #     print(" " + x, end="")
-    # print()
     return args_game, args_jvm
+
+
+def conflicting_library_resolution(library_map, group_and_name, incoming_lib):
+    # A set of jars that forge wants to update
+    FORGE_OVERWRITES = {"org.apache.commons:commons-lang3", "net.sf.jopt-simple:jopt-simple"}
+
+    old_lib = library_map[group_and_name]
+    if incoming_lib == old_lib:
+        return
+
+    if "natives" in incoming_lib and "natives" not in old_lib:
+        library_map[group_and_name] = incoming_lib
+    elif group_and_name in FORGE_OVERWRITES:
+        library_map[group_and_name] = incoming_lib
+    else:
+        assert False, f"Duplicated library {group_and_name}\n{json.dumps(old_lib, indent=2)}\n{json.dumps(incoming_lib,indent=2)}"
 
 
 def compose_cp(version) -> 'library_map':
     # Load the library map for .minecraft/versions/<version>
-    def collect_json(vname):
-        cfg = Path(FLAGS.dotmc_folder) / "versions" / vname / (vname + ".json")
-        obj = json.load(open(cfg, "r"))
+    obj = load_merged_version_json(version)
 
-        library_map = dict()
-        for l in obj["libraries"]:
-            if "rules" in l and not parse_libraries_rules(l["rules"])["linux"]:
-                continue
-            nc = l["name"].split(":")
-            assert len(nc) == 3
-            library_map[nc[0] + ":" + nc[1]] = l
-
-        if "inheritsFrom" in obj:
-            bobj = collect_json(obj["inheritsFrom"])
-            library_map.update(bobj["library_map"])
-        obj["library_map"] = library_map
-        return obj
-
-    library_map = collect_json(version)["library_map"]
+    library_map = dict()
+    for l in obj["libraries"]:
+        if "rules" in l and not parse_libraries_rules(l["rules"])["linux"]:
+            continue
+        nc = l["name"].split(":")
+        assert len(nc) == 3
+        lib_group_and_name = nc[0] + ":" + nc[1]
+        if lib_group_and_name in library_map:
+            conflicting_library_resolution(library_map, lib_group_and_name, l)
+        else:
+            library_map[lib_group_and_name] = l
 
     print("Classpaths:")
     for _lname, l in library_map.items():
@@ -266,8 +290,7 @@ def extract_natives(library_map, version):
 
 
 def assemble_launch_args(version: str, gamedir: Path, user_credential: dict):
-    cfg = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".json")
-    obj = json.load(open(cfg, "r"))
+    obj = load_merged_version_json(version)
     assets_dir = (Path(FLAGS.dotmc_folder) / "assets").resolve()
     native_dir = (Path(FLAGS.dotmc_folder) / "versions" / version / "native").resolve()
 
@@ -296,6 +319,10 @@ def assemble_launch_args(version: str, gamedir: Path, user_credential: dict):
 
     # natives
     args["natives_directory"] = str(native_dir)
+
+    # forge special
+    args["library_directory"] = str(Path(FLAGS.dotmc_folder) / "libraries")
+    args["classpath_separator"] = ":"
 
     # classpath
     jars = []
@@ -331,6 +358,13 @@ def assemble_launch_args(version: str, gamedir: Path, user_credential: dict):
 
 def main(argv):
     del argv
+
+    # Create an empty launcher_profiles.json to make forge installer happy
+    if FLAGS.dotmc_folder is not None:
+        p = Path(FLAGS.dotmc_folder) / "launcher_profiles.json"
+        if not p.exists():
+            with open(p, "w") as f:
+                json.dump(dict(profiles=dict()), f)
 
     if FLAGS.mode == "list":
         version_manifest = download_version_manifest()
