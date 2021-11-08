@@ -27,6 +27,9 @@ flags.DEFINE_string("gamedir", None, "Gamedir")
 flags.DEFINE_string("launch_argfile", "launch_argfile.txt",
                     "Launch argument file, to use the file: `java @launch_argfile.txt`")
 flags.DEFINE_string("offline", None, "Offline mode username")
+flags.DEFINE_string("launch_jvm", None, "Start this JVM binary instead of writing the arg file.")
+flags.DEFINE_list("launch_jvm_jvmarg", list(), "Extra JVM arguments if using launch_jvm")
+flags.DEFINE_bool("overwrite_natives", False, "Extract native library files even when they exist")
 
 http = httplib2.Http()
 
@@ -98,10 +101,11 @@ def download_libraries(library_map):
     # Downloads .minecraft/libraries/*
     libdir = Path(FLAGS.dotmc_folder) / "libraries"
     for _lname, l in library_map.items():
-        p = libdir / l["downloads"]["artifact"]["path"]
-        u = l["downloads"]["artifact"]["url"]
-        h = l["downloads"]["artifact"]["sha1"]
-        download_file(u, p, h)
+        if "artifact" in l["downloads"]:
+            p = libdir / l["downloads"]["artifact"]["path"]
+            u = l["downloads"]["artifact"]["url"]
+            h = l["downloads"]["artifact"]["sha1"]
+            download_file(u, p, h)
 
         if "natives" in l:
             assert l["natives"]["linux"] == "natives-linux"
@@ -173,24 +177,29 @@ def parse_libraries_rules(rules):
 
 # ===== version.json parser ===== #
 
-VERSION_JSON_INHERITE_OVERWRITE = set("id time releaseTime type mainClass".split(" "))
-VERSION_JSON_INHERITE_IGNORE = set("_comment_ inheritsFrom logging".split(" "))
-VERSION_JSON_INHERITE_SPECIAL = set("arguments libraries".split(" "))
+VERSION_JSON_INHERIT_OVERWRITE = {
+    "id", "time", "releaseTime", "type", "mainClass", "minecraftArguments", "main_jar_file_version"
+}
+VERSION_JSON_INHERIT_IGNORE = {"_comment_", "inheritsFrom", "logging"}
+VERSION_JSON_INHERIT_SPECIAL = {"arguments", "libraries"}
 
 
 def load_merged_version_json(version) -> "merged_version_json":
     this_version_json_path = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".json")
     assert this_version_json_path.is_file(), f"{version} not exists"
     obj = json.load(open(this_version_json_path, "r"))
+    main_jar_file = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".jar")
+    if main_jar_file.is_file():
+        obj["main_jar_file_version"] = version
 
     if "inheritsFrom" in obj:
         base_obj = load_merged_version_json(obj["inheritsFrom"])
         for k, v in obj.items():
-            if k in VERSION_JSON_INHERITE_IGNORE:
+            if k in VERSION_JSON_INHERIT_IGNORE:
                 continue
-            elif k in VERSION_JSON_INHERITE_OVERWRITE:
+            elif k in VERSION_JSON_INHERIT_OVERWRITE:
                 base_obj[k] = v
-            elif k in VERSION_JSON_INHERITE_SPECIAL:
+            elif k in VERSION_JSON_INHERIT_SPECIAL:
                 if k == "libraries":
                     base_obj["libraries"] += v
                 elif k == "arguments":
@@ -220,8 +229,14 @@ def compose_args(version) -> ('args_game list', 'args_jvm list'):
 
     args_game = []
     args_jvm = []
-    walker(version_obj["arguments"]["game"], parse_arguments_game_rules, args_game)
-    walker(version_obj["arguments"]["jvm"], parse_arguments_jvm_rules, args_jvm)
+    if "arguments" in version_obj:
+        assert "minecraftArguments" not in version_obj
+        walker(version_obj["arguments"]["game"], parse_arguments_game_rules, args_game)
+        walker(version_obj["arguments"]["jvm"], parse_arguments_jvm_rules, args_jvm)
+    else:
+        assert "minecraftArguments" in version_obj
+        args_jvm = r'-Djava.library.path=${natives_directory} -cp ${classpath}'.split(' ')
+        args_game = version_obj["minecraftArguments"].split(' ')
 
     return args_game, args_jvm
 
@@ -272,6 +287,10 @@ def extract_natives(library_map, version):
     # extract native binaries to .minecraft/versions/<version>/native
     libdir = Path(FLAGS.dotmc_folder) / "libraries"
     nativedir = Path(FLAGS.dotmc_folder) / "versions" / version / "native"
+    if nativedir.exists() and not FLAGS.overwrite_natives:
+        print("Native librarys exists, skip extraction.")
+        return
+    print("Extracting natives...")
     nativedir.mkdir(mode=0o755, parents=True, exist_ok=True)
     for _lname, l in library_map.items():
         if "natives" not in l: continue
@@ -303,7 +322,8 @@ def assemble_launch_args(version: str, gamedir: Path, user_credential: dict):
     args["auth_xuid"] = user_credential["auth_xuid"]
 
     # misc info
-    args["version_name"] = obj["id"]
+    # forge requires that the version_name to be the official version name
+    # args["version_name"] = obj["id"]
     args["game_directory"] = str(gamedir.resolve())
     args["assets_root"] = str(assets_dir)
     args["assets_index_name"] = obj["assets"]
@@ -328,11 +348,18 @@ def assemble_launch_args(version: str, gamedir: Path, user_credential: dict):
     jars = []
     library_map = compose_cp(version)
     for _lname, l in library_map.items():
-        p = Path(FLAGS.dotmc_folder) / "libraries" / l["downloads"]["artifact"]["path"]
-        jars.append(str(p.resolve()))
-    p = Path(FLAGS.dotmc_folder) / "versions" / version / (version + ".jar")
+        if "artifact" in l["downloads"]:
+            p = Path(FLAGS.dotmc_folder) / "libraries" / l["downloads"]["artifact"]["path"]
+            assert p.is_file(), f"{p} not exists"
+            jars.append(str(p.resolve()))
+    main_jar_file_version = obj["main_jar_file_version"]
+    p = Path(FLAGS.dotmc_folder) / "versions" / main_jar_file_version / (main_jar_file_version + ".jar")
+    assert p.is_file(), f"{p} not exists"
     jars.append(str(p.resolve()))
     args["classpath"] = ":".join(jars)
+
+    # nice try, forge
+    args["version_name"] = main_jar_file_version
 
     #
     cmds = []
@@ -387,7 +414,7 @@ def main(argv):
         assert FLAGS.dotmc_folder is not None
         assert FLAGS.version is not None
         assert FLAGS.gamedir is not None
-        assert FLAGS.launch_argfile is not None
+        assert (FLAGS.launch_argfile == "") != (FLAGS.launch_jvm is None)
         assert (Path(FLAGS.dotmc_folder) / "versions" / FLAGS.version /
                 f"{FLAGS.version}.json").is_file(), f"Version {FLAGS.version} does not exists"
 
@@ -419,9 +446,12 @@ def main(argv):
 
         # Emit arguments
         launch_args = assemble_launch_args(FLAGS.version, Path(FLAGS.gamedir), user_credential)
-        with open(FLAGS.launch_argfile, "w") as f:
-            for x in launch_args:
-                f.write(x + "\n")
+        if FLAGS.launch_argfile != "":
+            with open(FLAGS.launch_argfile, "w") as f:
+                for x in launch_args:
+                    f.write(x + "\n")
+        elif FLAGS.launch_jvm is not None:
+            subprocess.run([FLAGS.launch_jvm] + FLAGS.launch_jvm_jvmarg + launch_args)
 
 
 if __name__ == '__main__':
