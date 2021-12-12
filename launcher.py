@@ -243,7 +243,13 @@ def compose_args(version) -> ('args_game list', 'args_jvm list'):
 
 def conflicting_library_resolution(library_map, group_and_name, incoming_lib):
     # A set of jars that forge wants to update
-    FORGE_OVERWRITES = {"org.apache.commons:commons-lang3", "net.sf.jopt-simple:jopt-simple"}
+    FORGE_OVERWRITES = {
+        "org.apache.commons:commons-lang3",
+        "net.sf.jopt-simple:jopt-simple",
+        "org.apache.logging.log4j:log4j-api",
+        "org.apache.logging.log4j:log4j-core",
+        "org.apache.logging.log4j:log4j-slf4j18-impl"
+    }
 
     old_lib = library_map[group_and_name]
     if incoming_lib == old_lib:
@@ -369,6 +375,9 @@ def assemble_launch_args(version: str, gamedir: Path, user_credential: dict):
         for k, v in args.items():
             a = a.replace("${" + k + "}", v)
         cmds.append(a)
+    
+    # log4j2 vulnerability hotfix
+    cmds.append("-Dlog4j2.formatMsgNoLookups=true")
 
     cmds.append(obj["mainClass"])
     for a in args_game:
