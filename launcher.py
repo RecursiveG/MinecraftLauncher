@@ -281,6 +281,16 @@ def compose_cp(version) -> 'library_map':
 
     print("Classpaths:")
     for _lname, l in library_map.items():
+        # format used by fabric
+        if "url" in l:
+            assert "downloads" not in l
+            repo = l["url"]
+            del l["url"]
+            group, name, ver = l["name"].split(":")
+            group_path = group.replace(".", "/")
+            path = f"{group_path}/{name}/{ver}/{name}-{ver}.jar"
+            url = f"{repo}{group_path}/{name}/{ver}/{name}-{ver}.jar"
+            l["downloads"] = {"artifact":dict(url=url, path=path, sha1=None)}
         print(" ", l["name"], "[native]" if "natives" in l else "")
 
     return library_map
@@ -458,7 +468,11 @@ def main(argv):
         if FLAGS.launch_argfile != "":
             with open(FLAGS.launch_argfile, "w") as f:
                 for x in launch_args:
-                    f.write(x + "\n")
+                    # one argument per line, arg containing space should be quoted and escaped
+                    escaped = x
+                    if ' ' in x:
+                        escaped = "\"" + x.replace("\\", "\\\\") + "\""
+                    f.write(escaped + "\n")
         elif FLAGS.launch_jvm is not None:
             subprocess.run([FLAGS.launch_jvm] + FLAGS.launch_jvm_jvmarg + launch_args)
 
