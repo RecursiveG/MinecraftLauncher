@@ -1,4 +1,9 @@
 #!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+# Copyright 2021-2022, Recursive G
+#
+# Old login procedure using Mojang server.
+# This program is deprecated and is only for reference.
 
 import httplib2
 import sys
