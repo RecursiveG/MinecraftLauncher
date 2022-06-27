@@ -27,6 +27,8 @@ import dateutil.parser
 import secrets
 import string
 import urllib
+import keyring
+from typing import Tuple
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -35,7 +37,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string("credential", "credential.json", "Location to credential database")
+flags.DEFINE_string("playername", "Default Player", "Login credential identifier in system keyring")
 flags.DEFINE_bool("verbose", False, "")
 flags.DEFINE_bool("print_gameprofile", False, "Display Minecraft gameprofile")
 #flags.DEFINE_bool("force_refresh_oauth2_access_token", False, "")
@@ -46,7 +48,7 @@ logger.setLevel(logging.CRITICAL)
 http = httplib2.Http()
 
 
-def gen_pkce_code(verifier_len=86) -> (str, str, str):
+def gen_pkce_code(verifier_len=86) -> Tuple[str, str, str]:
     # returns verifier, challenge_method, challenge
     verifier = ''.join(secrets.choice(string.ascii_letters + string.digits + "-_.~") for _ in range(verifier_len))
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode()
@@ -55,16 +57,15 @@ def gen_pkce_code(verifier_len=86) -> (str, str, str):
 
 
 def load_credential() -> dict:
-    p = Path(FLAGS.credential)
-    if not p.exists():
+    cred = keyring.get_password("mslogin.py", FLAGS.playername)
+    if cred is None:
         return dict()
-    with open(p, "r") as f:
-        return json.load(f)
+    return json.loads(cred)
 
 
 def save_credential(cred: dict):
-    with open(Path(FLAGS.credential), "w") as f:
-        json.dump(cred, f, indent=2)
+    cred_json = json.dumps(cred, indent=2)
+    keyring.set_password("mslogin.py", FLAGS.playername, cred_json)
 
 
 def near_expire(d: dict, before_exp=24 * 60 * 60) -> bool:
@@ -180,7 +181,7 @@ def get_device_token(cred) -> str:
     return device_token["Token"]
 
 
-def get_login_url(cred) -> (str, str):
+def get_login_url(cred) -> Tuple[str, str]:
     # returns uri, verifier
     priv_key: ec.EllipticCurvePrivateKey = get_device_key(cred)
     device_token: str = get_device_token(cred)
@@ -216,7 +217,7 @@ def get_login_url(cred) -> (str, str):
     return json.loads(content.decode())["MsaOauthRedirect"], verifier
 
 
-def get_oauth2_auth_code(cred) -> (str, str):
+def get_oauth2_auth_code(cred) -> Tuple[str, str]:
     # returns oauth2 autherization code, verifier
     (uri, verifier) = get_login_url(cred)
 
@@ -343,7 +344,7 @@ def sisu_authorization(cred):
     return sisu_token_dict
 
 
-def get_xsts_token(cred) -> (str, str):
+def get_xsts_token(cred) -> Tuple[str, str]:
     # returns xsts_token, userhash
     if "xsts_token" in cred and not near_expire(cred["xsts_token"], 600):
         return cred["xsts_token"]["Token"], cred["xsts_token"]["DisplayClaims"]["xui"][0]["uhs"]
