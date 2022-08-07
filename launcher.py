@@ -9,21 +9,21 @@ List available versions:
 
   ./launcher.py [--mode list]
 
-Download version:
+Generate the argument file for Java 9+:
 
-  ./launcher.py --mode download --dotmc_folder <dir> --version <version>
+  ./launcher.py --mode argfile --dotmc_folder <dir> --version <version> --gamedir <dir> --argfile <output>
 
-Generate argument file for Java 9+:
+If you need to start a version that requires Java 8 and below:
 
-  ./launcher.py --mode launch --dotmc_folder <dir> --version <version> --gamedir <dir> --launch_argfile <output>
-
-java @launch_argfile.txt
+  ./launcher.py --mode launch --dotmc_folder <dir> --version <version> --gamedir <dir> \\
+    --jvm <java_executable> --jvmargs <arg1,arg2,arg3,...>
 '''
 
 from functools import reduce
 from absl import app
 from absl import flags
 from pathlib import Path
+import copy
 import httplib2
 import json
 import hashlib
@@ -33,21 +33,18 @@ import mslogin
 import re
 
 FLAGS = flags.FLAGS
-flags.DEFINE_enum(
-    'mode', 'list', ['list', 'argfile', 'launch'], '''
-list:     List all versions.
-download: Download game files. Need `dotmc_folder` and `version`
-launch:   Setup environment and export launch command. Need `dotmc_folder` and `version` and `gamedir`''')
+flags.DEFINE_enum('mode', 'list', ['list', 'argfile', 'launch'], '')
+
 flags.DEFINE_string("dotmc_folder", None, ".minecraft folder")
 flags.DEFINE_string("version", None, "Minecraft version")
 flags.DEFINE_string("gamedir", None, "Gamedir")
-flags.DEFINE_string("launch_argfile", "launch_argfile.txt",
-                    "Launch argument file, to use the file: `java @launch_argfile.txt`")
+
+flags.DEFINE_string("argfile", None, "output path of the arg file")
+
+flags.DEFINE_string("jvm", None, "path to the java executable")
+flags.DEFINE_list("jvmargs", list(), "Extra JVM arguments (launch mode only)")
+
 flags.DEFINE_string("offline", None, "Offline mode username")
-flags.DEFINE_string("launch_jvm", None, "Start this JVM binary instead of writing the arg file.")
-flags.DEFINE_list("launch_jvm_jvmarg", list(), "Extra JVM arguments if using launch_jvm")
-flags.DEFINE_bool("overwrite_natives", False, "Extract native library files even when they exist")
-flags.DEFINE_list("version_json_overlay", list(), "")
 
 http = httplib2.Http()
 
@@ -112,10 +109,6 @@ def download_version_chain(ver: str, versions_map):
         ver = version_obj.get("inheritsFrom")    # default=None
 
     ret = ret[::-1]
-    # append extra overlays
-    for fp in FLAGS.version_json_overlay:
-        ret.append(json.load(open(fp, 'r')))
-
     return ret
 
 
@@ -230,33 +223,47 @@ def conflicting_library_resolution(group_and_name, old_lib, incoming_lib):
 
     # if "natives" in incoming_lib and "natives" not in old_lib:
     #     return incoming_lib
-    
+
     # elif group_and_name in FORGE_OVERWRITES:
     #     return incoming_lib
     # else:
     #     assert False, f"Duplicated library {group_and_name}\n{json.dumps(old_lib, indent=2)}\n{json.dumps(incoming_lib,indent=2)}"
 
 
+def dedup_library_entries(entries):
+    ret = dict()
+    for l in entries:
+        nc = l["name"].split(":")
+        assert len(nc) == 3 or len(nc) == 4
+        lib_group_and_name = nc[0] + ":" + nc[1]
+
+        ret[lib_group_and_name] = l    # Just overwrite
+    return ret
+
+
 def build_library_map(merged_ver):
     obj = merged_ver
-    library_map = dict()
+    libraries = list()
+    natives = list()
 
-    # filter by rules and remove duplication
+    # construct library list and natives list
     for l in obj["libraries"]:
+        # Skip library based on rule
         if "rules" in l and not parse_libraries_rules(l["rules"])["linux"]:
             continue
-        nc = l["name"].split(":")
-        assert len(nc) == 3
-        lib_group_and_name = nc[0] + ":" + nc[1]
-        if lib_group_and_name in library_map:
-            old = library_map[lib_group_and_name]
-            library_map[lib_group_and_name] = conflicting_library_resolution(lib_group_and_name, old, l)
-        else:
-            library_map[lib_group_and_name] = l
 
-    # Fix old library url struct used by fabric
-    for l in library_map.values():
-        if "url" in l:
+        nc = l["name"].split(":")
+        assert len(nc) == 3 or len(nc) == 4
+        if len(nc) == 4:
+            # Native-only entry "group:artifactid:version:arch"
+            KNOWN_ARCH = ("linux-x86_64", "natives-linux", "linux-aarch_64")
+            arch = nc[3]
+            assert arch in KNOWN_ARCH, "Unexpected arch " + str(l)
+            if arch == "linux-aarch_64": continue    # assuming x86
+            natives.append(l)
+
+        elif "url" in l:
+            # Jar-only old library url struct used by fabric
             assert "downloads" not in l
             repo = l["url"]
             del l["url"]
@@ -265,54 +272,64 @@ def build_library_map(merged_ver):
             path = f"{group_path}/{name}/{ver}/{name}-{ver}.jar"
             url = f"{repo}{group_path}/{name}/{ver}/{name}-{ver}.jar"
             l["downloads"] = {"artifact": dict(url=url, path=path, sha1=None)}
+            libraries.append(l)
 
-    # print("Classpaths:")
-    # for l in library_map.values():
-    #     print(" ", l["name"], "[native]" if "natives" in l else "")
+        else:
+            # Jar and native combined entry
+            lib_copy = copy.deepcopy(l)
+            native_copy = copy.deepcopy(l)
 
-    return library_map
+            # jar part
+            if "artifact" in lib_copy["downloads"]:
+                lib_copy.pop("natives", None)
+                lib_copy.pop("extract", None)
+                lib_copy["downloads"].pop("classifiers", None)
+                libraries.append(lib_copy)
+
+            # native part
+            if "natives" in native_copy:
+                assert native_copy["natives"]["linux"] == "natives-linux"
+                tmp = native_copy["downloads"]["classifiers"]["natives-linux"]
+                native_copy["downloads"] = dict(artifact=tmp)
+                native_copy.pop("extract", None)
+                natives.append(native_copy)
+
+            # extra check
+            if "extract" in l:
+                assert l["extract"] == dict(exclude=["META-INF/"])
+
+    return dedup_library_entries(libraries), dedup_library_entries(natives)
 
 
-def download_libraries(library_map):
+def download_libraries(entry_list):
     # Downloads .minecraft/libraries/*
     libdir = Path(FLAGS.dotmc_folder) / "libraries"
-    for l in library_map.values():
-        if "artifact" in l["downloads"]:
-            p = libdir / l["downloads"]["artifact"]["path"]
-            u = l["downloads"]["artifact"]["url"]
-            h = l["downloads"]["artifact"]["sha1"]
-            download_file(u, p, h)
-
-        if "natives" in l:
-            assert l["natives"]["linux"] == "natives-linux"
-            obj = l["downloads"]["classifiers"]["natives-linux"]
-            p = libdir / obj["path"]
-            u = obj["url"]
-            h = obj["sha1"]
-            download_file(u, p, h)
+    seen_path = set()
+    for l in entry_list:
+        p = libdir / l["downloads"]["artifact"]["path"]
+        u = l["downloads"]["artifact"]["url"]
+        h = l["downloads"]["artifact"]["sha1"]
+        assert p not in seen_path, "Duplicate download path: " + p
+        seen_path.add(p)
+        download_file(u, p, h)
 
 
-def extract_natives(library_map, version):
+def extract_natives(natives_map, version):
     # extract native binaries to .minecraft/versions/<version>/native
     libdir = Path(FLAGS.dotmc_folder) / "libraries"
     nativedir = Path(FLAGS.dotmc_folder) / "versions" / version / "native"
-    if nativedir.exists() and not FLAGS.overwrite_natives:
-        print("Native librarys exists, skip extraction.")
-        return
+
     print("Extracting natives...")
     nativedir.mkdir(mode=0o755, parents=True, exist_ok=True)
-    for l in library_map.values():
-        if "natives" not in l: continue
-        assert l["natives"]["linux"] == "natives-linux"
-        native_obj = l["downloads"]["classifiers"]["natives-linux"]
-        if "extract" in l: assert l["extract"] == dict(exclude=["META-INF/"])
+    for l in natives_map.values():
+        native_obj = l["downloads"]["artifact"]
         jarfile = libdir / native_obj["path"]
         actual_sha = hashlib.sha1(open(jarfile, "rb").read()).hexdigest()
         assert actual_sha == native_obj["sha1"]
         print(f"SHA1 OK: {jarfile.name}")
+
         subprocess.run(
-            ["7z", "e", "-y",
-             jarfile.resolve(), "-x!META-INF", "-x!*.git", "-x!*.sha1", f"-o{nativedir.resolve()}"],
+            ["7z", "e", "-y", "-ir!*.so", jarfile.resolve(), f"-o{nativedir.resolve()}"],
             check=True,
             stdout=subprocess.DEVNULL)
 
@@ -402,10 +419,9 @@ def assemble_launch_args(merged_version, main_jar_version, library_map, gamedir:
     # classpath
     jars = []
     for l in library_map.values():
-        if "artifact" in l["downloads"]:
-            p = Path(FLAGS.dotmc_folder) / "libraries" / l["downloads"]["artifact"]["path"]
-            assert p.is_file(), f"{p} not exists"
-            jars.append(str(p.resolve()))
+        p = Path(FLAGS.dotmc_folder) / "libraries" / l["downloads"]["artifact"]["path"]
+        assert p.is_file(), f"{p} not exists"
+        jars.append(str(p.resolve()))
 
     p = Path(FLAGS.dotmc_folder) / "versions" / main_jar_version / (main_jar_version + ".jar")
     assert p.is_file(), f"{p} not exists"
@@ -455,8 +471,13 @@ def main(argv):
         assert FLAGS.dotmc_folder is not None
         assert FLAGS.version is not None
         assert FLAGS.gamedir is not None
-        if FLAGS.mode == "argfile": assert FLAGS.launch_argfile is not None
-        if FLAGS.mode == "launch": assert FLAGS.launch_jvm is not None
+        if FLAGS.mode == "argfile":
+            assert FLAGS.argfile is not None
+            assert FLAGS.jvm is None
+            assert len(FLAGS.jvmargs) == 0
+        if FLAGS.mode == "launch":
+            assert FLAGS.argfile is None
+            assert FLAGS.jvm is not None
 
         versions_manifest = download_version_manifest()
         versions_map = {v["id"]: v for v in versions_manifest["versions"]}
@@ -467,9 +488,9 @@ def main(argv):
 
         merged_version_json = reduce(merge_version_objs, normalized_versions_json)
 
-        library_map = build_library_map(merged_version_json)
-        download_libraries(library_map)
-        extract_natives(library_map, FLAGS.version)
+        library_map, natives_map = build_library_map(merged_version_json)
+        download_libraries(list(library_map.values()) + list(natives_map.values()))
+        extract_natives(natives_map, FLAGS.version)
 
         download_asset(merged_version_json)
 
@@ -494,7 +515,7 @@ def main(argv):
         launch_args = assemble_launch_args(merged_version_json, main_jar_version, library_map, Path(FLAGS.gamedir),
                                            user_credential)
         if FLAGS.mode == "argfile":
-            with open(FLAGS.launch_argfile, "w") as f:
+            with open(FLAGS.argfile, "w") as f:
                 for x in launch_args:
                     # one argument per line, arg containing space should be quoted and escaped
                     escaped = x
