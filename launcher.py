@@ -7,16 +7,11 @@
 
 List available versions:
 
-  ./launcher.py [--mode list]
+  ./launcher.py
 
-Generate the argument file for Java 9+:
+Generate launch arguments:
 
-  ./launcher.py --mode argfile --dotmc_folder <dir> --version <version> --gamedir <dir> --argfile <output>
-
-If you need to start a version that requires Java 8 and below:
-
-  ./launcher.py --mode launch --dotmc_folder <dir> --version <version> --gamedir <dir> \\
-    --jvm <java_executable> --jvmargs <arg1,arg2,arg3,...>
+  ./launcher.py --dotmc_folder <dir> --version <version> --gamedir <dir> --argfile <output>
 '''
 
 from functools import reduce
@@ -33,17 +28,12 @@ import mslogin
 import re
 
 FLAGS = flags.FLAGS
-flags.DEFINE_enum('mode', 'list', ['list', 'argfile', 'launch'], '')
 
 flags.DEFINE_string("dotmc_folder", None, ".minecraft folder")
 flags.DEFINE_string("version", None, "Minecraft version")
 flags.DEFINE_string("gamedir", None, "Gamedir")
 
 flags.DEFINE_string("argfile", None, "output path of the arg file")
-
-flags.DEFINE_string("jvm", None, "path to the java executable")
-flags.DEFINE_list("jvmargs", list(), "Extra JVM arguments (launch mode only)")
-
 flags.DEFINE_string("offline", None, "Offline mode username")
 
 http = httplib2.Http()
@@ -465,24 +455,17 @@ def main(argv):
             with open(p, "w") as f:
                 json.dump(dict(profiles=dict()), f)
 
-    if FLAGS.mode == "list":
+    if FLAGS.argfile is None:
         version_manifest = download_version_manifest()
         versions = reversed(version_manifest["versions"])
         for v in versions:
             s = "{type:<9} {id:<12} {url}".format(**v)
             print(s)
 
-    elif FLAGS.mode == "argfile" or FLAGS.mode == "launch":
+    else:
         assert FLAGS.dotmc_folder is not None
         assert FLAGS.version is not None
         assert FLAGS.gamedir is not None
-        if FLAGS.mode == "argfile":
-            assert FLAGS.argfile is not None
-            assert FLAGS.jvm is None
-            assert len(FLAGS.jvmargs) == 0
-        if FLAGS.mode == "launch":
-            assert FLAGS.argfile is None
-            assert FLAGS.jvm is not None
 
         versions_manifest = download_version_manifest()
         versions_map = {v["id"]: v for v in versions_manifest["versions"]}
@@ -519,16 +502,9 @@ def main(argv):
         # Emit arguments
         launch_args = assemble_launch_args(merged_version_json, main_jar_version, library_map, Path(FLAGS.gamedir),
                                            user_credential)
-        if FLAGS.mode == "argfile":
-            with open(FLAGS.argfile, "w") as f:
-                for x in launch_args:
-                    # one argument per line, arg containing space should be quoted and escaped
-                    escaped = x
-                    if ' ' in x:
-                        escaped = "\"" + x.replace("\\", "\\\\") + "\""
-                    f.write(escaped + "\n")
-        else:
-            subprocess.run([FLAGS.launch_jvm] + FLAGS.launch_jvm_jvmarg + launch_args)
+        with open(FLAGS.argfile, "w") as f:
+            for x in launch_args:
+                f.write(x + "\n")
 
 
 if __name__ == '__main__':
