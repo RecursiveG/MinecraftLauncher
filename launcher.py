@@ -118,8 +118,8 @@ def normalize_version_obj(ver_obj):
     if "minecraftArguments" in ver_obj:
         assert "arguments" not in ver_obj
         ver_obj["arguments"] = dict(
-            game=r'-Djava.library.path=${natives_directory} -cp ${classpath}'.split(' '),
-            jvm=ver_obj["minecraftArguments"].split(' '),
+            game=ver_obj["minecraftArguments"].split(' '),
+            jvm=r'-Djava.library.path=${natives_directory} -cp ${classpath}'.split(' '),
         )
         del ver_obj["minecraftArguments"]
 
@@ -157,7 +157,8 @@ def download_main_jar(normalized_versions) -> str:
         if "id" not in obj: continue
         ver = obj["id"]
         jar = Path(FLAGS.dotmc_folder) / "versions" / ver / f"{ver}.jar"
-        if jar.is_file():
+        # Why does Fabric put an empty jar there?
+        if jar.is_file() and jar.stat().st_size > 0:
             return ver
         if "downloads" in obj:
             u = obj["downloads"]["client"]["url"]
@@ -170,6 +171,9 @@ def download_main_jar(normalized_versions) -> str:
 def download_asset(merged_obj):
     obj = merged_obj
     ai = obj["assetIndex"]
+
+    skindir = Path(FLAGS.dotmc_folder) / "assets/skins"
+    skindir.mkdir(mode=0o755, parents=True, exist_ok=True)
 
     p = Path(FLAGS.dotmc_folder) / "assets/indexes" / (ai["id"] + ".json")
     download_file(ai["url"], p, ai["sha1"])
@@ -206,6 +210,7 @@ def parse_libraries_rules(rules):
     return ret
 
 
+# TODO remove this
 def conflicting_library_resolution(group_and_name, old_lib, incoming_lib):
     # A set of jars that forge wants to update
     # FORGE_OVERWRITES = {
