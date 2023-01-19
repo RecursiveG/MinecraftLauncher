@@ -23,6 +23,10 @@ POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   key="$1"
   case $key in
+    -d|--open-folder)
+      xdg-open "${SCRIPT_DIR}"
+      exit
+      ;;
     -f|--firejail)
       FIREJAIL_CONFIG="$2"
       shift # past argument
@@ -67,6 +71,7 @@ fi
 VERSION="$1"
 if [[ "$VERSION" == "" || "$PRINT_HELP" == "YES" ]]; then
   echo "Usage: $0 [opts] <version>"
+  echo "  -d                : Open in file browser: ${SCRIPT_DIR}"
   echo "  -f <filejail_cfg> : Start game in firejail"
   echo "                      Default to ${SCRIPT_DIR}/firejail-java-minecraft.conf"
   echo "                      Set to empty to disable firejail"
