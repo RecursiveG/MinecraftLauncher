@@ -171,7 +171,7 @@ def download_asset(merged_obj):
 
     for info in ai_obj["objects"].values():
         h = info["hash"]
-        u = f"http://resources.download.minecraft.net/{h[:2]}/{h}"
+        u = f"https://resources.download.minecraft.net/{h[:2]}/{h}"
         p = Path(FLAGS.dotmc_folder) / f"assets/objects/{h[:2]}/{h}"
         download_file(u, p, h)
 
