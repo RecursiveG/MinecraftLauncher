@@ -133,7 +133,7 @@ launch_with_firejail() {
     --whitelist="${BINDMOUNT_TARGET}"\
     --read-only="${SHARED_DOT_MINECRAFT}"\
     --read-write="${SHARED_DOT_MINECRAFT}/assets/skins"\
-    -- xargs -a launch_argfile.txt -d '\n' "${JAVA_EXECUTABLE}"
+    xargs -a launch_argfile.txt -d '\n' "${JAVA_EXECUTABLE}"
 }
 
 if [[ "${FIREJAIL_CONFIG}" == "" ]]; then
