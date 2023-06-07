@@ -341,12 +341,17 @@ def extract_natives(natives_map, version):
 
 
 def parse_arguments_game_rules(rules):
+    # append an argument if the corresponding feature is ON
+    FEATURES_ON = "has_custom_resolution".split(" ")
+    FEATURES_OFF = "is_demo_user has_quick_plays_support is_quick_play_singleplayer is_quick_play_multiplayer is_quick_play_realms".split(" ")
+
     assert len(rules) == 1
     assert rules[0]["action"] == "allow"
-    demo_rule = "is_demo_user" in rules[0]["features"]
-    resolution_rule = "has_custom_resolution" in rules[0]["features"]
-    assert demo_rule != resolution_rule
-    return resolution_rule
+    assert len(rules[0]["features"]) == 1
+    feature = list(rules[0]["features"].keys())[0]
+    assert rules[0]["features"][feature]
+    assert feature in FEATURES_ON or feature in FEATURES_OFF
+    return feature in FEATURES_ON
 
 
 def parse_arguments_jvm_rules(rules):
