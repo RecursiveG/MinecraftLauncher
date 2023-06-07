@@ -35,6 +35,7 @@ flags.DEFINE_string("gamedir", None, "Gamedir")
 
 flags.DEFINE_string("argfile", None, "output path of the arg file")
 flags.DEFINE_string("offline", None, "Offline mode username")
+flags.DEFINE_list("extra_natives", None, "Extra native binaries to load")
 
 http = httplib2.Http()
 
@@ -310,6 +311,8 @@ def download_libraries(entry_list):
 
 
 def extract_natives(natives_map, version):
+    import shutil
+
     # extract native binaries to .minecraft/versions/<version>/native
     libdir = Path(FLAGS.dotmc_folder) / "libraries"
     nativedir = Path(FLAGS.dotmc_folder) / "versions" / version / "native"
@@ -327,6 +330,11 @@ def extract_natives(natives_map, version):
             ["7z", "e", "-y", "-ir!*.so", jarfile.resolve(), f"-o{nativedir.resolve()}"],
             check=True,
             stdout=subprocess.DEVNULL)
+
+    for n in FLAGS.extra_natives:
+        dst_f = nativedir / Path(n).name
+        print(f"Extra native: {n} => {str(dst_f)}")
+        shutil.copyfile(n, dst_f)
 
 
 # ===== commandline assembling ===== #

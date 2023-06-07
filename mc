@@ -83,6 +83,7 @@ if [[ "$VERSION" == "" || "$PRINT_HELP" == "YES" ]]; then
   echo
   echo "The following files may be put inside the gamedir"
   echo "  custom_jvm_args.txt : Extra JVM arguments to be prepended."
+  echo "  extra_natives/      : Extra native binaries to be loaded."
   exit
 fi
 
@@ -116,8 +117,10 @@ launch_with_firejail() {
   if [[ "${OFFLINE_USERNAME}" != "" ]]; then
     EXTRA_LAUNCHER_PY_ARGS="--offline ${OFFLINE_USERNAME}"
   fi
+  EXTRA_NATIVES=$(shopt -s nullglob; echo ${GAMEDIR}/extra_natives/* | tr ' ' ,)
   export PYTHONDONTWRITEBYTECODE=1
   ${LAUNCHER_PY} $EXTRA_LAUNCHER_PY_ARGS\
+    --extra_natives "${EXTRA_NATIVES}"\
     --version ${VERSION} --dotmc_folder "${SHARED_DOT_MINECRAFT}"\
     --gamedir "${BINDMOUNT_TARGET}" --argfile="${GAMEDIR}/launch_argfile.txt"
 
