@@ -248,14 +248,18 @@ def build_library_map(merged_ver):
         if "rules" in l and not parse_libraries_rules(l["rules"])["linux"]:
             continue
 
+        # "group:artifactid:version[:classifier]"
+        X86_NATIVE_CLASSIFIERS = {"linux-x86_64", "natives-linux"}
+        NATIVE_CLASSIFIERS = {"linux-x86_64", "natives-linux", "linux-aarch_64"}
+        ALL_CLASSIFIERS = {"linux-x86_64", "natives-linux", "linux-aarch_64", "api", None}
+
         nc = l["name"].split(":")
         assert len(nc) == 3 or len(nc) == 4
-        if len(nc) == 4:
-            # Native-only entry "group:artifactid:version:arch"
-            KNOWN_ARCH = ("linux-x86_64", "natives-linux", "linux-aarch_64")
-            arch = nc[3]
-            assert arch in KNOWN_ARCH, "Unexpected arch " + str(l)
-            if arch == "linux-aarch_64": continue    # assuming x86
+        classifier = nc[3] if len(nc) == 4 else None
+        assert classifier in ALL_CLASSIFIERS
+
+        if classifier in NATIVE_CLASSIFIERS:
+            if nc[3] not in X86_NATIVE_CLASSIFIERS: continue
             natives.append(l)
 
         elif "url" in l:
