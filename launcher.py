@@ -248,15 +248,22 @@ def build_library_map(merged_ver):
         if "rules" in l and not parse_libraries_rules(l["rules"])["linux"]:
             continue
 
-        # "group:artifactid:version[:classifier]"
+        # "group:artifactid:version[:classifier][@extension]"
         X86_NATIVE_CLASSIFIERS = {"linux-x86_64", "natives-linux"}
         NATIVE_CLASSIFIERS = {"linux-x86_64", "natives-linux", "linux-aarch_64"}
         ALL_CLASSIFIERS = {"linux-x86_64", "natives-linux", "linux-aarch_64", "api", None}
+        ALL_EXTENSIONS = {"jar"}
 
-        nc = l["name"].split(":")
+        # strip ext
+        tmp = l["name"].split("@")
+        assert len(tmp) == 1 or len(tmp) == 2
+        if len(tmp) == 2: assert tmp[1] in ALL_EXTENSIONS
+
+        # classify
+        nc = tmp[0].split(":")
         assert len(nc) == 3 or len(nc) == 4
         classifier = nc[3] if len(nc) == 4 else None
-        assert classifier in ALL_CLASSIFIERS
+        assert classifier in ALL_CLASSIFIERS, f"bad classifier {classifier}"
 
         if classifier in NATIVE_CLASSIFIERS:
             if nc[3] not in X86_NATIVE_CLASSIFIERS: continue
