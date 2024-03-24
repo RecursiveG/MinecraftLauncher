@@ -8,7 +8,7 @@ BINDMOUNT_TARGET="${HOME}/.minecraft"
 # Derived path
 SHARED_DOT_MINECRAFT="${SCRIPT_DIR}/dotminecraft"
 FIREJAIL_CONFIG="${SCRIPT_DIR}/firejail-java-minecraft.conf"
-GAMEDIR="${SCRIPT_DIR}/gamedir"
+GAMEDIR=""
 LAUNCHER_PY="${SCRIPT_DIR}/launcher.py"
 
 cd "$SCRIPT_DIR"
@@ -85,6 +85,10 @@ if [[ "$VERSION" == "" || "$PRINT_HELP" == "YES" ]]; then
   echo "  custom_jvm_args.txt : Extra JVM arguments to be prepended."
   echo "  extra_natives/      : Extra native binaries to be loaded."
   exit
+fi
+
+if [[ "$GAMEDIR" == "" ]]; then
+  GAMEDIR="${SCRIPT_DIR}/gamedir_${VERSION}"
 fi
 
 mkdir -p "$SCRIPT_DIR"
